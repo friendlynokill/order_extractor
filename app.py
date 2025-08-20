@@ -1,3 +1,4 @@
+# app.py（中文界面）
 import json
 import base64
 import csv
@@ -8,17 +9,15 @@ from typing import List, Dict, Tuple, Any
 
 import streamlit as st
 
-
 # =========================
-# Core logic (adapted from your script)
+# 核心逻辑（保留你的解析流程）
 # =========================
 
 def decode_content(content):
-    """Decode content with various encodings."""
+    """尝试用多种方式解码响应文本为 JSON。"""
     if not content:
         return None
 
-    # If content is already a string, try to parse it as JSON
     if isinstance(content, str):
         try:
             return json.loads(content)
@@ -32,7 +31,6 @@ def decode_content(content):
 
     encodings = ['utf-8', 'latin1', 'cp1252', 'ascii']
 
-    # If it's base64 encoded (or could be)
     if isinstance(content, str):
         try:
             decoded = base64.b64decode(content, validate=False)
@@ -48,7 +46,6 @@ def decode_content(content):
         except Exception:
             pass
 
-    # If it's raw binary
     if isinstance(content, (bytes, bytearray)):
         for encoding in encodings:
             try:
@@ -64,7 +61,7 @@ def decode_content(content):
 
 
 def extract_orders(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
-    """Extract order information from the response data."""
+    """从接口响应中提取订单信息。"""
     orders = []
     phone_sources = {'recharge_data': 0, 'buyer_phone': 0, 'nickname': 0}
 
@@ -82,7 +79,7 @@ def extract_orders(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str
             buyer_info = order.get('buyerInfo', {})
             common_info = order.get('commonInfo', {})
 
-            # Phone extraction (priority order)
+            # 按优先级提取手机号
             phone = ''
             accept_info = order.get('acceptInfo', {})
             recharge_data = accept_info.get('rechargeData', {})
@@ -114,14 +111,13 @@ def extract_orders(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str
             orders.append(order_data)
 
     except Exception:
-        # Fail-soft: return whatever we collected
         pass
 
     return orders, phone_sources
 
 
 def extract_data(har_data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
-    """Extract order data from HAR entries."""
+    """从 HAR 文件的 entries 中提取订单数据。"""
     extracted_data: List[Dict[str, Any]] = []
     total_phone_sources = {'recharge_data': 0, 'buyer_phone': 0, 'nickname': 0}
 
@@ -143,7 +139,6 @@ def extract_data(har_data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[s
 
             mime_type = content.get('mimeType', 'unknown')
             if not isinstance(mime_type, str) or not mime_type.lower().startswith('application/json'):
-                # Skip non-JSON content
                 continue
 
             data = decode_content(content.get('text', ''))
@@ -157,21 +152,18 @@ def extract_data(har_data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[s
                     total_phone_sources[k] += v
 
         except Exception:
-            # Skip a bad entry and continue
             continue
 
     return extracted_data, total_phone_sources
 
 
 def har_bytes_to_json(b: bytes):
-    """Load and parse HAR from bytes."""
-    # HAR files are JSON. Try utf-8 first, then fallbacks.
+    """将 HAR（二进制）解析为 JSON。"""
     for enc in ('utf-8', 'utf-16', 'latin1'):
         try:
             return json.loads(b.decode(enc))
         except Exception:
             continue
-    # Last-ditch: try json.load on a text wrapper
     try:
         return json.loads(b)
     except Exception:
@@ -179,14 +171,14 @@ def har_bytes_to_json(b: bytes):
 
 
 def to_csv_bytes(rows: List[Dict[str, Any]]) -> bytes:
-    """Return CSV (utf-8-sig) bytes from extracted rows with Excel-safe Order ID."""
+    """将结果行写成 CSV（二进制，UTF-8-SIG）。"""
     if not rows:
         return b''
 
-    # Zero-width space to keep Excel from scientific-notation on long IDs
     safe_rows = []
     for r in rows:
         r = dict(r)
+        # 为避免 Excel 将长订单号转科学计数法，前置零宽空格
         r['Order ID'] = '\u200B' + str(r.get('Order ID', ''))
         safe_rows.append(r)
 
@@ -199,75 +191,62 @@ def to_csv_bytes(rows: List[Dict[str, Any]]) -> bytes:
 
 
 # =========================
-# Streamlit UI
+# Streamlit 界面（中文）
 # =========================
 
-st.set_page_config(page_title="HAR → Orders CSV", page_icon="📦", layout="centered")
-st.title("📦 HAR → Orders CSV")
+st.set_page_config(page_title="HAR 转 CSV", page_icon="📦", layout="centered")
+st.title("📦 HAR 转 CSV")
 st.markdown(
-    "Upload one or more `.har` files captured from your browser. "
-    "This app will scan `orderSearch` responses, extract orders, and return one merged CSV."
+    "上传一个或多个 `.har` 文件（从浏览器开发者工具的 **Network** 面板导出）。"
+    "应用会扫描包含 `orderSearch` 的响应，提取订单并合并为一份 CSV。"
 )
 
 uploaded = st.file_uploader(
-    "Drop HAR file(s) here",
+    "拖拽或选择 `.har` 文件（可多选）",
     type=["har"],
     accept_multiple_files=True,
-    help="You can export a HAR from your browser's DevTools Network tab."
+    help="Chrome/Edge：打开开发者工具 → Network → 右键空白处 → Save all as HAR with content。"
 )
 
-run_btn = st.button("Process files")
+run_btn = st.button("开始处理")
 
 if run_btn:
     if not uploaded:
-        st.warning("Please upload at least one `.har` file.")
+        st.warning("请至少上传 1 个 `.har` 文件。")
         st.stop()
 
     all_rows: List[Dict[str, Any]] = []
-    totals = {'recharge_data': 0, 'buyer_phone': 0, 'nickname': 0}
-
     progress = st.progress(0)
+
     for i, uf in enumerate(uploaded, start=1):
-        with st.status(f"Processing **{uf.name}** …", expanded=False):
+        with st.status(f"正在处理 **{uf.name}** …", expanded=False):
             raw = uf.read()
             har_obj = har_bytes_to_json(raw)
             if not har_obj:
-                st.error(f"Could not parse HAR: {uf.name}")
+                st.error(f"无法解析 HAR：{uf.name}")
             else:
-                rows, phone_sources = extract_data(har_obj)
+                rows, _ = extract_data(har_obj)
                 all_rows.extend(rows)
-                for k in totals:
-                    totals[k] += phone_sources.get(k, 0)
-                st.write(f"Found **{len(rows)}** orders in this file.")
+                st.write(f"在该文件中发现 **{len(rows)}** 条订单。")
 
         progress.progress(i / len(uploaded))
 
     if not all_rows:
-        st.info("No orders found in the uploaded HAR file(s).")
+        st.info("未在所上传的文件中找到订单数据。")
         st.stop()
 
-    # Build downloadable CSV
+    # 导出 CSV
     csv_bytes = to_csv_bytes(all_rows)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_name = f"orders_{ts}.csv"
 
-    st.success(f"Done! Extracted **{len(all_rows)}** orders from **{len(uploaded)}** file(s).")
-    st.download_button(
-        "⬇️ Download CSV",
-        data=csv_bytes,
-        file_name=out_name,
-        mime="text/csv"
-    )
+    st.success(f"完成！共从 **{len(uploaded)}** 个文件提取 **{len(all_rows)}** 条订单。")
+    st.download_button("⬇️ 下载合并后的 CSV", data=csv_bytes, file_name=out_name, mime="text/csv")
 
-    with st.expander("Phone number source breakdown"):
-        st.write(
-            {
-                "From recharge data": totals['recharge_data'],
-                "From buyer phone": totals['buyer_phone'],
-                "From nickname": totals['nickname'],
-            }
-        )
+    # 可配置的预览区（不再显示“手机号来源统计”）
+    with st.expander("预览数据（前 N 行）"):
+        max_n = len(all_rows)
+        default_n = min(1000, max_n)
+        n = st.number_input("选择要预览的行数（从 1 开始）", min_value=1, max_value=max_n, value=default_n, step=100)
+        st.dataframe(all_rows[:n], use_container_width=True)
 
-    with st.expander("Preview first 200 rows"):
-        # Streamlit can display a list of dicts directly
-        st.dataframe(all_rows[:200], use_container_width=True)
